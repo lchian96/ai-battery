@@ -58,7 +58,7 @@ button {
 .widget-root {
   position: absolute;
   inset: 0 auto auto 0;
-  width: 288px;
+  width: 278px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -69,6 +69,10 @@ button {
   backdrop-filter: blur(40px);
   transform: scale(var(--widget-scale));
   transform-origin: top left;
+}
+
+.widget-root.is-settings-mode {
+  width: 316px;
 }
 
 .summary-surface {
@@ -211,7 +215,7 @@ button {
 }
 
 .expanded-panel.is-open {
-  max-height: 640px;
+  max-height: 820px;
   opacity: 1;
   pointer-events: auto;
   border-top-color: rgba(255, 255, 255, 0.04);
@@ -360,7 +364,7 @@ button {
 
 .settings-scroll-full {
   margin-top: 0;
-  max-height: 192px;
+  max-height: 356px;
   padding-right: 4px;
 }
 
@@ -368,6 +372,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 10px 12px;
   background: rgba(255, 255, 255, calc(0.03 * var(--glass-highlight-opacity)));
@@ -396,8 +401,17 @@ button {
 .toggle-btn {
   appearance: none;
   width: 36px;
+  min-width: 36px;
   height: 22px;
+  min-height: 22px;
   padding: 2px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+  position: relative;
+  overflow: hidden;
   border: 1px solid rgba(255, 255, 255, calc(0.08 * var(--glass-highlight-opacity)));
   border-radius: 999px;
   background: rgba(255, 255, 255, calc(0.08 * var(--glass-highlight-opacity)));
@@ -418,9 +432,13 @@ button {
   display: block;
   width: 16px;
   height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  flex: 0 0 auto;
   border-radius: 999px;
   background: rgb(229, 231, 235);
   transition: transform 160ms ease;
+  will-change: transform;
 }
 
 .toggle-btn.is-on .toggle-btn-thumb {
@@ -471,6 +489,7 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 108px;
 }
 
 .slider-input {
@@ -541,6 +560,12 @@ button {
   align-items: center;
   justify-content: center;
   border-radius: 6px;
+}
+
+.list-action-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+  pointer-events: none;
 }
 
 .list-action-btn svg,

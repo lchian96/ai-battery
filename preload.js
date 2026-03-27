@@ -11,5 +11,7 @@ contextBridge.exposeInMainWorld("windowApi", {
   syncSize: (payload) => ipcRenderer.invoke("window:sync-size", payload),
   getPosition: () => ipcRenderer.invoke("window:get-position"),
   setPosition: (payload) => ipcRenderer.invoke("window:set-position", payload),
-  setAlwaysOnTop: (payload) => ipcRenderer.invoke("window:set-always-on-top", payload)
+  setAlwaysOnTop: (payload) => ipcRenderer.invoke("window:set-always-on-top", payload),
+  getLaunchOnStartup: () => ipcRenderer.invoke("window:get-launch-on-startup"),
+  setLaunchOnStartup: (payload) => ipcRenderer.invoke("window:set-launch-on-startup", payload)
 });

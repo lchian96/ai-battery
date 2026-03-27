@@ -25,6 +25,7 @@ let accounts = [];
 let latestResults = {};
 let profileStatuses = {};
 let preferences = loadPreferences();
+let launchOnStartupSupported = true;
 let isExpanded = false;
 let isSettingsMode = false;
 let expandedSettingId = null;
@@ -53,6 +54,7 @@ async function init() {
   accounts = loadStoredAccounts(defaultAccounts);
   saveAccounts();
   await applyAlwaysOnTopPreference();
+  await syncLaunchOnStartupPreference();
   applyMaterialPreferences();
   latestResults = ensureMapForAccounts(accounts, latestResults);
   profileStatuses = ensureMapForAccounts(accounts, profileStatuses);
@@ -83,6 +85,7 @@ function bindEvents() {
   });
 
   widgetRootEl.addEventListener("pointerdown", handleWidgetPointerDown);
+  window.addEventListener("blur", handleWindowBlur);
 }
 
 function render(options = {}) {
@@ -90,6 +93,7 @@ function render(options = {}) {
   const panelIsOpen = panelPhase === "expanding" || panelPhase === "expanded";
   const panelShouldRender = panelPhase !== "collapsed";
   widgetRootEl.classList.toggle("is-expanded", isExpanded);
+  widgetRootEl.classList.toggle("is-settings-mode", isSettingsMode);
   summarySurfaceEl.setAttribute("aria-expanded", String(isExpanded));
   summarySurfaceEl.setAttribute("aria-label", isExpanded ? "Collapse quota widget" : "Expand quota widget");
   summaryChevronEl.setAttribute("data-state", isExpanded ? "expanded" : "collapsed");
@@ -135,6 +139,27 @@ function toggleExpanded() {
   panelTransitionTimerId = window.setTimeout(() => {
     panelPhase = "expanded";
   }, EXPAND_ANIMATION_MS);
+}
+
+function collapseToCompact(options = {}) {
+  const shouldAnimate = options.animate !== false;
+  if (!isExpanded && panelPhase === "collapsed" && !isSettingsMode) {
+    return;
+  }
+
+  window.clearTimeout(panelTransitionTimerId);
+  isSettingsMode = false;
+  isExpanded = false;
+  panelPhase = "collapsing";
+  render({ animateResize: shouldAnimate });
+  panelTransitionTimerId = window.setTimeout(() => {
+    panelPhase = "collapsed";
+    render();
+  }, shouldAnimate ? EXPAND_ANIMATION_MS : 0);
+}
+
+function handleWindowBlur() {
+  collapseToCompact();
 }
 
 async function handleWidgetPointerDown(event) {
@@ -263,10 +288,6 @@ function syncAccountIdentity(accountId, profileEmail) {
 }
 
 function renderSettingsView() {
-  if (!expandedSettingId && accounts[0]?.id) {
-    expandedSettingId = accounts[0].id;
-  }
-
   settingsViewEl.innerHTML = `
     <div class="settings-scroll settings-scroll-full">
       <div class="panel-header settings-view-header">
@@ -289,6 +310,28 @@ function renderSettingsView() {
           <span class="toggle-btn-thumb" aria-hidden="true"></span>
         </button>
       </div>
+      ${
+        launchOnStartupSupported
+          ? `
+      <div class="settings-global-card">
+        <div class="settings-global-copy">
+          <span class="setting-name">Launch On Startup</span>
+          <span class="setting-meta">Start the widget automatically when you sign in to Windows.</span>
+        </div>
+        <button
+          id="launchOnStartupToggle"
+          type="button"
+          class="toggle-btn ${preferences.launchOnStartup ? "is-on" : ""}"
+          role="switch"
+          aria-checked="${preferences.launchOnStartup ? "true" : "false"}"
+          aria-label="Toggle launch on startup"
+        >
+          <span class="toggle-btn-thumb" aria-hidden="true"></span>
+        </button>
+      </div>
+      `
+          : ""
+      }
       <div class="settings-global-card">
         <div class="settings-global-copy">
           <span class="setting-name">Opacity</span>
@@ -340,6 +383,11 @@ function renderSettingsView() {
     await toggleAlwaysOnTop();
   });
 
+  document.getElementById("launchOnStartupToggle")?.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await toggleLaunchOnStartup();
+  });
+
   document.getElementById("resyncAllBtn")?.addEventListener("click", async (event) => {
     event.stopPropagation();
     await resyncAllAccountsFromSettings();
@@ -362,9 +410,19 @@ function bindSettingsEvents() {
   });
 
   accounts.forEach((account, index) => {
+    document.getElementById(`move-up-${account.id}`)?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      moveAccountByDelta(account.id, -1);
+    });
+
+    document.getElementById(`move-down-${account.id}`)?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      moveAccountByDelta(account.id, 1);
+    });
+
     document.getElementById(`toggle-${account.id}`)?.addEventListener("click", (event) => {
       event.stopPropagation();
-      expandedSettingId = account.id;
+      expandedSettingId = expandedSettingId === account.id ? null : account.id;
       render();
     });
 
@@ -428,7 +486,7 @@ function handleSettingDragStart(event) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", accountId);
   }
-  render();
+  updateSettingDropTargetHighlight();
 }
 
 function handleSettingDragOver(event) {
@@ -444,7 +502,7 @@ function handleSettingDragOver(event) {
 
   if (dropTargetSettingId !== accountId) {
     dropTargetSettingId = accountId;
-    render();
+    updateSettingDropTargetHighlight();
   }
 }
 
@@ -454,13 +512,14 @@ function handleSettingDrop(event) {
   if (!draggedSettingId || !targetAccountId || draggedSettingId === targetAccountId) {
     draggedSettingId = null;
     dropTargetSettingId = null;
-    render();
+    updateSettingDropTargetHighlight();
     return;
   }
 
   reorderAccounts(draggedSettingId, targetAccountId);
   draggedSettingId = null;
   dropTargetSettingId = null;
+  updateSettingDropTargetHighlight();
   setStatus("Account order updated.", "ok");
   render();
 }
@@ -468,7 +527,14 @@ function handleSettingDrop(event) {
 function handleSettingDragEnd() {
   draggedSettingId = null;
   dropTargetSettingId = null;
-  render();
+  updateSettingDropTargetHighlight();
+}
+
+function updateSettingDropTargetHighlight() {
+  document.querySelectorAll(".setting-card[data-account-id]").forEach((cardEl) => {
+    const accountId = cardEl.getAttribute("data-account-id");
+    cardEl.classList.toggle("is-drop-target", Boolean(dropTargetSettingId) && accountId === dropTargetSettingId);
+  });
 }
 
 function reorderAccounts(sourceId, targetId) {
@@ -483,6 +549,18 @@ function reorderAccounts(sourceId, targetId) {
   nextAccounts.splice(targetIndex, 0, movedAccount);
   accounts = nextAccounts;
   saveAccounts();
+}
+
+function moveAccountByDelta(accountId, delta) {
+  const sourceIndex = accounts.findIndex((account) => account.id === accountId);
+  const targetIndex = sourceIndex + delta;
+  if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= accounts.length) {
+    return;
+  }
+
+  reorderAccounts(accountId, accounts[targetIndex].id);
+  setStatus("Account order updated.", "ok");
+  render();
 }
 
 function buildOverallBarMarkup() {
@@ -572,6 +650,24 @@ function buildSettingsMarkup() {
               <span class="setting-meta">${escapeHtml(statusSummary)}</span>
             </div>
             <div class="setting-actions">
+              <button
+                id="move-up-${account.id}"
+                type="button"
+                class="list-action-btn"
+                aria-label="Move ${escapeHtml(account.name)} up"
+                ${index === 0 ? "disabled" : ""}
+              >
+                ${getChevronUpIcon()}
+              </button>
+              <button
+                id="move-down-${account.id}"
+                type="button"
+                class="list-action-btn"
+                aria-label="Move ${escapeHtml(account.name)} down"
+                ${index === accounts.length - 1 ? "disabled" : ""}
+              >
+                ${getChevronDownIcon()}
+              </button>
               <button
                 id="toggle-${account.id}"
                 type="button"
@@ -867,6 +963,7 @@ function loadPreferences() {
     if (!raw) {
       return {
         alwaysOnTop: false,
+        launchOnStartup: false,
         glassOpacity: 100
       };
     }
@@ -874,11 +971,13 @@ function loadPreferences() {
     const parsed = JSON.parse(raw);
     return {
       alwaysOnTop: Boolean(parsed?.alwaysOnTop),
+      launchOnStartup: Boolean(parsed?.launchOnStartup),
       glassOpacity: clampGlassOpacity(parsed?.glassOpacity)
     };
   } catch {
     return {
       alwaysOnTop: false,
+      launchOnStartup: false,
       glassOpacity: 100
     };
   }
@@ -924,6 +1023,49 @@ async function toggleAlwaysOnTop() {
     setStatus(preferences.alwaysOnTop ? "Always-on-top enabled." : "Always-on-top disabled.", "ok");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Unable to update always-on-top.", "error");
+  }
+
+  render();
+}
+
+async function syncLaunchOnStartupPreference() {
+  try {
+    const response = await window.windowApi?.getLaunchOnStartup?.();
+    if (!response?.ok) {
+      launchOnStartupSupported = Boolean(response?.supported);
+      return;
+    }
+
+    launchOnStartupSupported = response.supported !== false;
+    preferences = {
+      ...preferences,
+      launchOnStartup: Boolean(response.enabled)
+    };
+    savePreferences();
+  } catch {
+    // Ignore startup registration read failures and keep the widget usable.
+  }
+}
+
+async function toggleLaunchOnStartup() {
+  const nextEnabled = !preferences.launchOnStartup;
+
+  try {
+    const response = await window.windowApi?.setLaunchOnStartup?.({
+      enabled: nextEnabled
+    });
+    if (!response?.ok) {
+      throw new Error(response?.message || "Unable to update launch-on-startup.");
+    }
+
+    preferences = {
+      ...preferences,
+      launchOnStartup: Boolean(response.enabled)
+    };
+    savePreferences();
+    setStatus(preferences.launchOnStartup ? "Launch on startup enabled." : "Launch on startup disabled.", "ok");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Unable to update launch-on-startup.", "error");
   }
 
   render();

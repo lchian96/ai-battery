@@ -4,6 +4,13 @@
   "productName": "AI Battery",
   "description": "Frameless Electron widget for tracking Codex weekly quota across multiple local profiles",
   "author": "lchian96",
+  "os": [
+    "win32",
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "main": "main.js",
   "repository": {
     "type": "git",
@@ -15,11 +22,14 @@
   },
   "scripts": {
     "start": "electron .",
-    "dist": "electron-packager . \"AI Battery\" --platform=win32 --arch=x64 --out=dist --overwrite --asar --ignore=\"^/dist($|/)\" --ignore=\"^/.tmp-app-server-ts($|/)\""
+    "dist": "electron-packager . \"AI Battery\" --out=dist --overwrite --asar --ignore=\"^/dist($|/)\" --ignore=\"^/.tmp-app-server-ts($|/)\"",
+    "dist:win": "electron-packager . \"AI Battery\" --platform=win32 --arch=x64 --out=dist --overwrite --asar --ignore=\"^/dist($|/)\" --ignore=\"^/.tmp-app-server-ts($|/)\"",
+    "dist:mac": "electron-packager . \"AI Battery\" --platform=darwin --out=dist --overwrite --asar --ignore=\"^/dist($|/)\" --ignore=\"^/.tmp-app-server-ts($|/)\""
   },
   "keywords": [
     "codex",
     "electron",
+    "macos",
     "quota",
     "tracker",
     "widget",

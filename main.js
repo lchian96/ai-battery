@@ -9,12 +9,12 @@ const APP_SERVER_TIMEOUT_MS = 12000;
 const RATE_LIMIT_RETRY_ATTEMPTS = 3;
 const RATE_LIMIT_RETRY_DELAY_MS = 700;
 const WINDOW_SIZE = {
-  width: 228,
+  width: 219,
   height: 59,
-  minWidth: 228,
+  minWidth: 219,
   minHeight: 59,
-  maxWidth: 228,
-  maxHeight: 680
+  maxWidth: 250,
+  maxHeight: 860
 };
 
 let cachedCliRuntime = null;
@@ -22,6 +22,7 @@ let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let collapsedWindowAnchor = null;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -107,12 +108,43 @@ function createTray() {
 }
 
 function getCodexCliScriptPath() {
+  const candidates = [];
   const appData = process.env.APPDATA;
-  if (!appData) {
-    return null;
+  if (appData) {
+    candidates.push(path.join(appData, "npm", "node_modules"));
   }
 
-  return path.join(appData, "npm", "node_modules", "@openai", "codex", "bin", "codex.js");
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const npmRootLookup = spawnSync(npmCommand, ["root", "-g"], {
+    windowsHide: true,
+    encoding: "utf8"
+  });
+
+  if (npmRootLookup.status === 0) {
+    candidates.push(
+      ...npmRootLookup.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+    );
+  }
+
+  candidates.push(
+    path.join(os.homedir(), ".npm-global", "lib", "node_modules"),
+    "/opt/homebrew/lib/node_modules",
+    "/usr/local/lib/node_modules",
+    "/usr/lib/node_modules"
+  );
+
+  const roots = [...new Set(candidates.filter(Boolean))];
+  for (const root of roots) {
+    const scriptPath = path.join(root, "@openai", "codex", "bin", "codex.js");
+    if (fs.existsSync(scriptPath)) {
+      return scriptPath;
+    }
+  }
+
+  return null;
 }
 
 function getDefaultAccounts() {
@@ -216,7 +248,17 @@ function escapeCmdValue(value) {
   return String(value ?? "").replace(/"/g, '""');
 }
 
-function createLoginScript(codexHome, cliRuntime, codexCliScriptPath) {
+function escapeShellArg(value) {
+  return `'${String(value ?? "").replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function escapeAppleScriptString(value) {
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+}
+
+function createWindowsLoginScript(codexHome, cliRuntime, codexCliScriptPath) {
   const scriptPath = path.join(os.tmpdir(), `ai-battery-login-${Date.now()}.cmd`);
   const lines = [
     "@echo off",
@@ -238,6 +280,55 @@ function createLoginScript(codexHome, cliRuntime, codexCliScriptPath) {
   return scriptPath;
 }
 
+function createUnixLoginScript(codexHome, cliRuntime, codexCliScriptPath) {
+  const scriptPath = path.join(os.tmpdir(), `ai-battery-login-${Date.now()}.sh`);
+  const commandParts = [];
+  if (cliRuntime.forceElectronRunAsNode) {
+    commandParts.push("ELECTRON_RUN_AS_NODE=1");
+  }
+  commandParts.push(escapeShellArg(cliRuntime.command), escapeShellArg(codexCliScriptPath), "login");
+
+  const lines = [
+    "#!/bin/bash",
+    `export CODEX_HOME=${escapeShellArg(codexHome)}`,
+    "echo \"Running Codex login for:\"",
+    "echo \"  $CODEX_HOME\"",
+    "echo",
+    commandParts.join(" "),
+    "status=$?",
+    "echo",
+    "echo \"Codex login finished with exit code $status.\"",
+    "echo \"Close this window and return to the widget.\"",
+    "echo",
+    "read -n 1 -s -r -p \"Press any key to close...\"",
+    "echo"
+  ];
+
+  fs.writeFileSync(scriptPath, `${lines.join("\n")}\n`, "utf8");
+  fs.chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
+function openMacLoginTerminal(scriptPath, cwd) {
+  const command = `bash ${escapeShellArg(scriptPath)}`;
+  const child = spawn(
+    "osascript",
+    [
+      "-e",
+      'tell application "Terminal" to activate',
+      "-e",
+      `tell application "Terminal" to do script "${escapeAppleScriptString(command)}"`
+    ],
+    {
+      detached: true,
+      stdio: "ignore",
+      cwd
+    }
+  );
+
+  child.unref();
+}
+
 function openCodexLoginTerminal(codexHome) {
   const trimmedPath = typeof codexHome === "string" ? codexHome.trim() : "";
   if (!trimmedPath) {
@@ -252,15 +343,26 @@ function openCodexLoginTerminal(codexHome) {
   fs.mkdirSync(trimmedPath, { recursive: true });
 
   const cliRuntime = getCliRuntime();
-  const scriptPath = createLoginScript(trimmedPath, cliRuntime, codexCliScriptPath);
-  const child = spawn("cmd.exe", ["/d", "/k", scriptPath], {
-    windowsHide: false,
-    detached: true,
-    shell: false,
-    cwd: trimmedPath
-  });
+  if (process.platform === "win32") {
+    const scriptPath = createWindowsLoginScript(trimmedPath, cliRuntime, codexCliScriptPath);
+    const child = spawn("cmd.exe", ["/d", "/k", scriptPath], {
+      windowsHide: false,
+      detached: true,
+      shell: false,
+      cwd: trimmedPath
+    });
 
-  child.unref();
+    child.unref();
+    return;
+  }
+
+  if (process.platform === "darwin") {
+    const scriptPath = createUnixLoginScript(trimmedPath, cliRuntime, codexCliScriptPath);
+    openMacLoginTerminal(scriptPath, trimmedPath);
+    return;
+  }
+
+  throw new Error("Open Login is currently supported on Windows and macOS only.");
 }
 
 function getCliRuntime() {
@@ -274,7 +376,10 @@ function getCliRuntime() {
     process.env.NODE_EXE,
     process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "nodejs", "node.exe") : null,
     process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "nodejs", "node.exe") : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "nodejs", "node.exe") : null
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "nodejs", "node.exe") : null,
+    "/opt/homebrew/bin/node",
+    "/usr/local/bin/node",
+    "/usr/bin/node"
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -284,7 +389,8 @@ function getCliRuntime() {
     }
   }
 
-  const lookup = spawnSync("where.exe", ["node"], {
+  const lookupCommand = process.platform === "win32" ? "where.exe" : "which";
+  const lookup = spawnSync(lookupCommand, ["node"], {
     windowsHide: true,
     encoding: "utf8"
   });
@@ -633,6 +739,60 @@ ipcMain.handle("window:set-always-on-top", (event, payload) => {
   return { enabled: window.isAlwaysOnTop() };
 });
 
+function getLaunchOnStartupState() {
+  if (process.platform !== "win32") {
+    return {
+      ok: false,
+      supported: false,
+      enabled: false,
+      message: "Launch on startup is only supported on Windows."
+    };
+  }
+
+  const settings = app.getLoginItemSettings();
+  return {
+    ok: true,
+    supported: true,
+    enabled: Boolean(settings.openAtLogin)
+  };
+}
+
+ipcMain.handle("window:get-launch-on-startup", () => {
+  try {
+    return getLaunchOnStartupState();
+  } catch (error) {
+    return {
+      ok: false,
+      supported: true,
+      enabled: false,
+      message: error instanceof Error ? error.message : "Unable to read launch-on-startup state."
+    };
+  }
+});
+
+ipcMain.handle("window:set-launch-on-startup", (_event, payload) => {
+  try {
+    if (process.platform !== "win32") {
+      return getLaunchOnStartupState();
+    }
+
+    const enabled = Boolean(payload?.enabled);
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      openAsHidden: true
+    });
+
+    return getLaunchOnStartupState();
+  } catch (error) {
+    return {
+      ok: false,
+      supported: true,
+      enabled: false,
+      message: error instanceof Error ? error.message : "Unable to update launch-on-startup."
+    };
+  }
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: WINDOW_SIZE.width,
@@ -684,18 +844,26 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
-  createTray();
-  createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    } else {
-      showMainWindow();
-    }
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    showMainWindow();
   });
-});
+
+  app.whenReady().then(() => {
+    createTray();
+    createWindow();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      } else {
+        showMainWindow();
+      }
+    });
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin" && isQuitting) {
