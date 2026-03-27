@@ -1,0 +1,33 @@
+{
+  "name": "ai-battery",
+  "version": "1.0.0",
+  "productName": "AI Battery",
+  "description": "Frameless Electron widget for tracking Codex weekly quota across multiple local profiles",
+  "author": "lchian96",
+  "main": "main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lchian96/ai-battery.git"
+  },
+  "homepage": "https://github.com/lchian96/ai-battery",
+  "bugs": {
+    "url": "https://github.com/lchian96/ai-battery/issues"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-packager . \"AI Battery\" --platform=win32 --arch=x64 --out=dist --overwrite --asar --ignore=\"^/dist($|/)\" --ignore=\"^/.tmp-app-server-ts($|/)\""
+  },
+  "keywords": [
+    "codex",
+    "electron",
+    "quota",
+    "tracker",
+    "widget",
+    "windows"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/packager": "^18.4.4",
+    "electron": "^37.10.3"
+  }
+}

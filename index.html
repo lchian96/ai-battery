@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    />
+  <title>AI Battery</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="widgetRoot" class="widget-root" aria-label="AI Battery widget">
+        <div id="summarySurface" class="summary-surface" role="button" tabindex="0" aria-expanded="false">
+          <div class="summary-main">
+            <div class="summary-copy">
+              <div class="summary-topline">
+                <div class="brand-lockup">
+                  <span class="brand-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                      <path
+                        d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"
+                        fill="currentColor"
+                        fill-rule="evenodd"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  </span>
+                  <span class="brand-label">AI Battery</span>
+                </div>
+                <span id="nextResetLabel" class="next-reset">Next: --</span>
+              </div>
+              <div id="overallBar" class="overall-bar" aria-hidden="true"></div>
+            </div>
+            <span id="summaryChevron" class="summary-chevron" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path
+                  d="M6.7 9.3a1 1 0 0 1 1.4 0L12 13.2l3.9-3.9a1 1 0 1 1 1.4 1.4l-4.6 4.6a1 1 0 0 1-1.4 0L6.7 10.7a1 1 0 0 1 0-1.4Z"
+                  fill="currentColor"
+                />
+              </svg>
+            </span>
+          </div>
+        </div>
+
+        <section id="expandedPanel" class="expanded-panel" aria-label="Expanded quota widget">
+          <div id="accountsView" class="panel-view"></div>
+          <div id="settingsView" class="panel-view" hidden></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
