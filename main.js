@@ -61,6 +61,67 @@ function hideMainWindow() {
   mainWindow.hide();
 }
 
+function quitApp() {
+  isQuitting = true;
+  app.quit();
+}
+
+function isLaunchOnStartupSupported() {
+  return process.platform === "win32" || process.platform === "darwin";
+}
+
+function getLaunchOnStartupState() {
+  if (!isLaunchOnStartupSupported()) {
+    return {
+      ok: false,
+      supported: false,
+      enabled: false,
+      message: "Launch on startup is only supported on Windows and macOS."
+    };
+  }
+
+  const settings = app.getLoginItemSettings();
+  const macStatus = typeof settings.status === "string" ? settings.status : "";
+  const enabled =
+    process.platform === "darwin"
+      ? Boolean(settings.openAtLogin) || macStatus === "enabled" || macStatus === "requires-approval"
+      : Boolean(settings.openAtLogin);
+
+  const response = {
+    ok: true,
+    supported: true,
+    enabled
+  };
+
+  if (process.platform === "darwin" && macStatus === "requires-approval") {
+    response.message = "Launch on startup is enabled, but macOS still requires approval in System Settings > General > Login Items.";
+  }
+
+  return response;
+}
+
+function shouldShowWindowOnReady() {
+  if (process.platform !== "darwin") {
+    return true;
+  }
+
+  try {
+    const settings = app.getLoginItemSettings();
+    return !Boolean(settings.wasOpenedAtLogin || settings.wasOpenedAsHidden);
+  } catch {
+    return true;
+  }
+}
+
+function configureMacWidgetMode() {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  app.setActivationPolicy("accessory");
+  app.dock?.hide();
+}
+
 function createTray() {
   if (tray) {
     return tray;
@@ -81,10 +142,7 @@ function createTray() {
       { type: "separator" },
       {
         label: "Quit",
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        }
+        click: () => quitApp()
       }
     ])
   );
@@ -747,23 +805,37 @@ ipcMain.handle("window:set-always-on-top", (event, payload) => {
   return { enabled: window.isAlwaysOnTop() };
 });
 
-function getLaunchOnStartupState() {
-  if (process.platform !== "win32") {
-    return {
-      ok: false,
-      supported: false,
-      enabled: false,
-      message: "Launch on startup is only supported on Windows."
-    };
+ipcMain.handle("window:show-widget-context-menu", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window) {
+    return null;
   }
 
-  const settings = app.getLoginItemSettings();
-  return {
-    ok: true,
-    supported: true,
-    enabled: Boolean(settings.openAtLogin)
-  };
-}
+  return new Promise((resolve) => {
+    let selectedAction = null;
+    const menu = Menu.buildFromTemplate([
+      {
+        label: "Settings",
+        click: () => {
+          selectedAction = "settings";
+        }
+      },
+      { type: "separator" },
+      {
+        label: "Quit",
+        click: () => {
+          selectedAction = "quit";
+          quitApp();
+        }
+      }
+    ]);
+
+    menu.popup({
+      window,
+      callback: () => resolve(selectedAction)
+    });
+  });
+});
 
 ipcMain.handle("window:get-launch-on-startup", () => {
   try {
@@ -780,15 +852,18 @@ ipcMain.handle("window:get-launch-on-startup", () => {
 
 ipcMain.handle("window:set-launch-on-startup", (_event, payload) => {
   try {
-    if (process.platform !== "win32") {
+    if (!isLaunchOnStartupSupported()) {
       return getLaunchOnStartupState();
     }
 
     const enabled = Boolean(payload?.enabled);
-    app.setLoginItemSettings({
-      openAtLogin: enabled,
-      openAsHidden: true
-    });
+    const nextSettings = {
+      openAtLogin: enabled
+    };
+    if (process.platform === "win32") {
+      nextSettings.openAsHidden = true;
+    }
+    app.setLoginItemSettings(nextSettings);
 
     return getLaunchOnStartupState();
   } catch (error) {
@@ -834,7 +909,9 @@ function createWindow() {
       return;
     }
 
-    mainWindow.show();
+    if (shouldShowWindowOnReady()) {
+      mainWindow.show();
+    }
   });
 
   mainWindow.on("close", (event) => {
@@ -860,6 +937,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    configureMacWidgetMode();
     createTray();
     createWindow();
 

@@ -105,6 +105,7 @@ function bindEvents() {
   });
 
   widgetRootEl.addEventListener("pointerdown", handleWidgetPointerDown);
+  widgetRootEl.addEventListener("contextmenu", handleWidgetContextMenu);
   window.addEventListener("blur", handleWindowBlur);
 }
 
@@ -167,6 +168,25 @@ function toggleExpanded() {
   }, EXPAND_ANIMATION_MS);
 }
 
+function openSettingsView(options = {}) {
+  const shouldAnimate = options.animate !== false;
+  window.clearTimeout(panelTransitionTimerId);
+  isExpanded = true;
+  isSettingsMode = true;
+
+  if (!shouldAnimate) {
+    panelPhase = "expanded";
+    render();
+    return;
+  }
+
+  panelPhase = "expanding";
+  render({ animateResize: true });
+  panelTransitionTimerId = window.setTimeout(() => {
+    panelPhase = "expanded";
+  }, EXPAND_ANIMATION_MS);
+}
+
 function collapseToCompact(options = {}) {
   const shouldAnimate = options.animate !== false;
   if (!isExpanded && panelPhase === "collapsed" && !isSettingsMode) {
@@ -193,6 +213,19 @@ function collapseToCompact(options = {}) {
 
 function handleWindowBlur() {
   collapseToCompact({ animate: false });
+}
+
+async function handleWidgetContextMenu(event) {
+  event.preventDefault();
+
+  try {
+    const action = await window.windowApi?.showWidgetContextMenu?.();
+    if (action === "settings") {
+      openSettingsView({ animate: false });
+    }
+  } catch {
+    // Ignore context-menu bridge failures and keep the widget usable.
+  }
 }
 
 async function handleWidgetPointerDown(event) {
@@ -317,8 +350,7 @@ function renderAccountsView() {
 
   document.getElementById("openSettingsBtn")?.addEventListener("click", (event) => {
     event.stopPropagation();
-    isSettingsMode = true;
-    render();
+    openSettingsView({ animate: false });
   });
 }
 
@@ -921,7 +953,10 @@ async function toggleLaunchOnStartup() {
       launchOnStartup: Boolean(response.enabled)
     };
     savePreferences();
-    setStatus(preferences.launchOnStartup ? "Launch on startup enabled." : "Launch on startup disabled.", "ok");
+    setStatus(
+      response?.message || (preferences.launchOnStartup ? "Launch on startup enabled." : "Launch on startup disabled."),
+      "ok"
+    );
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Unable to update launch-on-startup.", "error");
   }

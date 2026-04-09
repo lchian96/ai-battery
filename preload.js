@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("windowApi", {
   getPosition: () => ipcRenderer.invoke("window:get-position"),
   setPosition: (payload) => ipcRenderer.invoke("window:set-position", payload),
   setAlwaysOnTop: (payload) => ipcRenderer.invoke("window:set-always-on-top", payload),
+  showWidgetContextMenu: () => ipcRenderer.invoke("window:show-widget-context-menu"),
   getLaunchOnStartup: () => ipcRenderer.invoke("window:get-launch-on-startup"),
   setLaunchOnStartup: (payload) => ipcRenderer.invoke("window:set-launch-on-startup", payload)
 });

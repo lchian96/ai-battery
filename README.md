@@ -121,7 +121,7 @@ Before pushing changes, at minimum:
 - Tap the compact header to expand or collapse it
 - Clicking outside the widget collapses it back to compact mode
 - Optional `Always On Top` toggle in Settings
-- Optional `Launch On Startup` toggle in Settings for Windows sign-in
+- Optional `Launch On Startup` toggle in Settings for Windows and macOS sign-in
 - `Resync All` button in Settings for manual retry across all configured accounts
 - Account setup per fixed profile folder
 - Live Codex quota sync through the Codex CLI app-server
@@ -135,8 +135,9 @@ Before pushing changes, at minimum:
 
 - `Open Login` launches `codex login` for the selected fixed profile folder.
 - On macOS, `Open Login` uses Terminal via AppleScript and is intended to be run from a Mac environment.
+- On macOS, the widget runs as an accessory app so it stays out of the Dock and is intended to be reopened from the tray icon.
 - `Sync Now` is still available in Settings, but it is only for manual refresh or retry. Ready accounts now auto-sync on app open.
 - `Always On Top` is stored locally in the widget and restored on launch.
-- `Launch On Startup` registers the packaged Windows app to open when you sign in.
-- `Launch On Startup` is currently Windows-only.
+- `Launch On Startup` registers the app to open when you sign in on Windows and macOS.
+- On macOS, the first enable may require approval in System Settings > General > Login Items.
 - The compact shell intentionally follows the original zip design, but the settings flow is more advanced than the original sample because it supports real profile setup and sync.
