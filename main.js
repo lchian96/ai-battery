@@ -4,15 +4,15 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const ACCOUNT_COUNT = 3;
+const FIXED_ACCOUNT_COUNT = 3;
 const APP_SERVER_TIMEOUT_MS = 12000;
 const RATE_LIMIT_RETRY_ATTEMPTS = 3;
 const RATE_LIMIT_RETRY_DELAY_MS = 700;
 const WINDOW_SIZE = {
   width: 219,
-  height: 59,
+  height: 58,
   minWidth: 219,
-  minHeight: 59,
+  minHeight: 1,
   maxWidth: 250,
   maxHeight: 860
 };
@@ -22,6 +22,7 @@ let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let collapsedWindowAnchor = null;
+let collapsedWindowHeight = WINDOW_SIZE.height;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function delay(ms) {
@@ -149,10 +150,13 @@ function getCodexCliScriptPath() {
 
 function getDefaultAccounts() {
   const home = os.homedir();
-  return Array.from({ length: ACCOUNT_COUNT }, (_, index) => ({
-    name: `Account ${index + 1}`,
-    codexHome: index === 0 ? path.join(home, ".codex") : path.join(home, `.codex-${index + 1}`)
-  }));
+  return Array.from({ length: FIXED_ACCOUNT_COUNT }, (_, index) => {
+    const codexHome = index === 0 ? path.join(home, ".codex") : path.join(home, `.codex-${index + 1}`);
+    return {
+      name: path.basename(codexHome),
+      codexHome
+    };
+  });
 }
 
 function decodeJwtPayload(token) {
@@ -212,7 +216,7 @@ function getProfileStatus(codexHome) {
       pathExists: false,
       authExists: false,
       ready: false,
-      message: "Enter a CODEX_HOME path to configure this account."
+      message: "Profile folder is unavailable."
     };
   }
 
@@ -227,7 +231,7 @@ function getProfileStatus(codexHome) {
   } else if (!pathExists) {
     message = "Profile folder does not exist yet. Run login to create it.";
   } else if (!authExists) {
-    message = "Profile exists, but this CODEX_HOME is not logged in yet.";
+    message = "Profile exists, but this folder is not logged in yet.";
   }
 
   return {
@@ -332,7 +336,7 @@ function openMacLoginTerminal(scriptPath, cwd) {
 function openCodexLoginTerminal(codexHome) {
   const trimmedPath = typeof codexHome === "string" ? codexHome.trim() : "";
   if (!trimmedPath) {
-    throw new Error("Enter a CODEX_HOME path before starting login.");
+    throw new Error("Profile folder is unavailable.");
   }
 
   const codexCliScriptPath = getCodexCliScriptPath();
@@ -605,17 +609,17 @@ ipcMain.handle("quota:fetch", async (_event, payload) => {
   try {
     const codexHome = typeof payload?.codexHome === "string" ? payload.codexHome.trim() : "";
     if (!codexHome) {
-      return { ok: false, error: "Missing CODEX_HOME path." };
+      return { ok: false, error: "Missing profile folder." };
     }
 
     if (!fs.existsSync(codexHome)) {
-      return { ok: false, error: `CODEX_HOME path not found: ${codexHome}` };
+      return { ok: false, error: `Profile folder not found: ${codexHome}` };
     }
 
     if (!fs.existsSync(path.join(codexHome, "auth.json"))) {
       return {
         ok: false,
-        error: "Not logged in for this account profile. Run `codex login` with this CODEX_HOME first."
+        error: "Not logged in for this account profile. Run `codex login` for this profile folder first."
       };
     }
 
@@ -669,13 +673,17 @@ ipcMain.handle("window:sync-size", (event, payload) => {
       y:
         panelPhase === "collapsed"
           ? currentY
-          : Math.round(currentY + Math.max(0, currentBounds.height - WINDOW_SIZE.height) / 2)
+          : Math.round(currentY + Math.max(0, currentBounds.height - collapsedWindowHeight) / 2)
     };
+  }
+
+  if (panelPhase === "collapsed") {
+    collapsedWindowHeight = height;
   }
 
   const nextX = collapsedWindowAnchor.x;
   const nextY =
-    panelPhase === "collapsed" ? collapsedWindowAnchor.y : Math.round(collapsedWindowAnchor.y - (height - WINDOW_SIZE.height) / 2);
+    panelPhase === "collapsed" ? collapsedWindowAnchor.y : Math.round(collapsedWindowAnchor.y - (height - collapsedWindowHeight) / 2);
 
   const sizeChanged = currentBounds.width !== width || currentBounds.height !== height;
   const positionChanged = currentX !== nextX || currentY !== nextY;
@@ -722,7 +730,7 @@ ipcMain.handle("window:set-position", (event, payload) => {
   const currentHeight = window.getBounds().height;
   collapsedWindowAnchor = {
     x: nextX,
-    y: Math.round(nextY + Math.max(0, currentHeight - WINDOW_SIZE.height) / 2)
+    y: Math.round(nextY + Math.max(0, currentHeight - collapsedWindowHeight) / 2)
   };
   window.setPosition(nextX, nextY, true);
   return { x: nextX, y: nextY };

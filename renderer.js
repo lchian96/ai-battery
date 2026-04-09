@@ -1,16 +1,37 @@
-const STORAGE_KEY = "codexQuotaWidget.accounts.v4";
+const OBSOLETE_ACCOUNT_STORAGE_KEYS = [
+  "codexQuotaWidget.accounts.v4",
+  "codexQuotaWidget.accounts.v3",
+  "codexQuotaWidget.accounts.v2",
+  "codexQuotaWidget.sample.v1"
+];
 const PREFERENCES_KEY = "codexQuotaWidget.preferences.v1";
-const LEGACY_STORAGE_KEYS = ["codexQuotaWidget.accounts.v3", "codexQuotaWidget.accounts.v2", "codexQuotaWidget.sample.v1"];
 const AUTO_REFRESH_MS = 5 * 60 * 1000;
 const CLOCK_REFRESH_MS = 60 * 1000;
 const EXPAND_ANIMATION_MS = 350;
-const COLORS = ["#3b82f6", "#6366f1", "#8b5cf6", "#d946ef", "#f43f5e"];
-const SAMPLE_ACCOUNT_SEEDS = [
-  { name: "Account 1", used: 0, limit: 1000, resetOffsetDays: 30 },
-  { name: "Account 2", used: 0, limit: 1000, resetOffsetDays: 30 },
-  { name: "Account 3", used: 0, limit: 1000, resetOffsetDays: 30 }
-];
-
+const FIXED_ACCOUNT_COUNT = 3;
+const THEMES = {
+  cool: {
+    label: "Cool",
+    accentRgb: "96, 165, 250",
+    accentSoftRgb: "132, 196, 255",
+    accentHoverRgb: "147, 197, 253",
+    barColors: ["#3b82f6", "#6366f1", "#8b5cf6", "#d946ef", "#f43f5e"]
+  },
+  ember: {
+    label: "Ember",
+    accentRgb: "249, 115, 22",
+    accentSoftRgb: "251, 191, 36",
+    accentHoverRgb: "252, 211, 77",
+    barColors: ["#ef4444", "#f97316", "#f59e0b", "#fbbf24", "#fde047"]
+  },
+  forest: {
+    label: "Forest",
+    accentRgb: "34, 197, 94",
+    accentSoftRgb: "74, 222, 128",
+    accentHoverRgb: "134, 239, 172",
+    barColors: ["#16a34a", "#22c55e", "#4ade80", "#84cc16", "#bef264"]
+  }
+};
 const widgetRootEl = document.getElementById("widgetRoot");
 const summarySurfaceEl = document.getElementById("summarySurface");
 const summaryChevronEl = document.getElementById("summaryChevron");
@@ -32,12 +53,11 @@ let expandedSettingId = null;
 let statusMessage = "Waiting for connected Codex accounts.";
 let statusTone = "neutral";
 let dragState = null;
+let dragMoveFrameId = 0;
 let windowResizeFrameId = 0;
 let panelPhase = "collapsed";
 let panelTransitionTimerId = 0;
 let lastWindowSyncSignature = "";
-let draggedSettingId = null;
-let dropTargetSettingId = null;
 
 init().catch((error) => {
   setStatus(error instanceof Error ? error.message : "Failed to initialize widget.", "error");
@@ -51,8 +71,8 @@ async function init() {
 
   const defaultsResponse = await window.quotaApi.getDefaults();
   defaultAccounts = normalizeDefaultAccounts(defaultsResponse?.accounts);
-  accounts = loadStoredAccounts(defaultAccounts);
-  saveAccounts();
+  clearObsoleteAccountStorage();
+  accounts = buildInitialAccounts(defaultAccounts);
   await applyAlwaysOnTopPreference();
   await syncLaunchOnStartupPreference();
   applyMaterialPreferences();
@@ -110,7 +130,13 @@ function render(options = {}) {
     renderAccountsView();
   }
 
+  syncExpandedPanelHeight(panelShouldRender);
   queueWindowResize(shouldAnimateResize ? EXPAND_ANIMATION_MS : 0);
+}
+
+function syncExpandedPanelHeight(panelShouldRender) {
+  const panelHeight = panelShouldRender ? expandedPanelEl.scrollHeight : 0;
+  expandedPanelEl.style.setProperty("--expanded-panel-height", `${panelHeight}px`);
 }
 
 function toggleExpanded() {
@@ -150,6 +176,13 @@ function collapseToCompact(options = {}) {
   window.clearTimeout(panelTransitionTimerId);
   isSettingsMode = false;
   isExpanded = false;
+
+  if (!shouldAnimate) {
+    panelPhase = "collapsed";
+    render();
+    return;
+  }
+
   panelPhase = "collapsing";
   render({ animateResize: shouldAnimate });
   panelTransitionTimerId = window.setTimeout(() => {
@@ -159,7 +192,7 @@ function collapseToCompact(options = {}) {
 }
 
 function handleWindowBlur() {
-  collapseToCompact();
+  collapseToCompact({ animate: false });
 }
 
 async function handleWidgetPointerDown(event) {
@@ -207,10 +240,11 @@ function handleWidgetPointerMove(event) {
     return;
   }
 
-  void window.windowApi?.setPosition?.({
-    x: dragState.windowStartX + deltaX,
-    y: dragState.windowStartY + deltaY
-  });
+  dragState.pendingX = dragState.windowStartX + deltaX;
+  dragState.pendingY = dragState.windowStartY + deltaY;
+  if (!dragMoveFrameId) {
+    dragMoveFrameId = window.requestAnimationFrame(flushDragMove);
+  }
 }
 
 function handleWidgetPointerUp(event) {
@@ -237,11 +271,28 @@ function handleWidgetPointerCancel(event) {
 }
 
 function cleanupDragState() {
+  if (dragMoveFrameId) {
+    window.cancelAnimationFrame(dragMoveFrameId);
+    dragMoveFrameId = 0;
+  }
+
   dragState = null;
   widgetRootEl.classList.remove("is-dragging");
   window.removeEventListener("pointermove", handleWidgetPointerMove);
   window.removeEventListener("pointerup", handleWidgetPointerUp);
   window.removeEventListener("pointercancel", handleWidgetPointerCancel);
+}
+
+function flushDragMove() {
+  dragMoveFrameId = 0;
+  if (!dragState || !dragState.didDrag) {
+    return;
+  }
+
+  void window.windowApi?.setPosition?.({
+    x: dragState.pendingX,
+    y: dragState.pendingY
+  });
 }
 
 function isInteractiveTarget(target) {
@@ -271,20 +322,99 @@ function renderAccountsView() {
   });
 }
 
-function syncAccountIdentity(accountId, profileEmail) {
-  if (typeof profileEmail !== "string" || !profileEmail.trim()) {
-    return;
+function normalizeCodexHomeForComparison(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/[\\/]+/g, "/")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+function normalizeProfileEmail(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function getKnownProfileEmail(accountId) {
+  return normalizeProfileEmail(latestResults[accountId]?.profileEmail || profileStatuses[accountId]?.profileEmail);
+}
+
+function getAssociatedProfileEmail(accountId) {
+  const latestEmail = latestResults[accountId]?.profileEmail;
+  if (typeof latestEmail === "string" && latestEmail.trim()) {
+    return latestEmail.trim();
   }
 
-  const nextName = profileEmail.trim();
-  const current = accounts.find((item) => item.id === accountId);
-  if (!current || current.name === nextName) {
-    return;
+  const statusEmail = profileStatuses[accountId]?.profileEmail;
+  if (typeof statusEmail === "string" && statusEmail.trim()) {
+    return statusEmail.trim();
   }
 
-  updateAccount(accountId, {
-    name: nextName
-  });
+  return "";
+}
+
+function getAccountDisplayName(account) {
+  const associatedEmail = getAssociatedProfileEmail(account.id);
+  if (associatedEmail) {
+    return associatedEmail;
+  }
+
+  return account.name;
+}
+
+function findDuplicateProfileConflict(accountId, options = {}) {
+  const currentIndex = accounts.findIndex((account) => account.id === accountId);
+  if (currentIndex === -1) {
+    return null;
+  }
+
+  const normalizedCodexHome = normalizeCodexHomeForComparison(options.codexHome ?? accounts[currentIndex]?.codexHome);
+  const normalizedProfileEmail = normalizeProfileEmail(options.profileEmail || getKnownProfileEmail(accountId));
+
+  for (let index = 0; index < currentIndex; index += 1) {
+    const otherAccount = accounts[index];
+    const otherCodexHome = normalizeCodexHomeForComparison(otherAccount.codexHome);
+    if (normalizedCodexHome && otherCodexHome && normalizedCodexHome === otherCodexHome) {
+      return {
+        otherAccount,
+        reason: "path",
+        message: `This profile folder is already assigned to ${getAccountDisplayName(otherAccount)}.`
+      };
+    }
+
+    const otherProfileEmail = getKnownProfileEmail(otherAccount.id);
+    if (normalizedProfileEmail && otherProfileEmail && normalizedProfileEmail === otherProfileEmail) {
+      return {
+        otherAccount,
+        reason: "account",
+        message: `This Codex account is already connected in ${getAccountDisplayName(otherAccount)}.`
+      };
+    }
+  }
+
+  return null;
+}
+
+function applyDuplicateProfileConflict(accountId, response, conflict) {
+  profileStatuses[accountId] = {
+    ...(response || {}),
+    ok: true,
+    ready: false,
+    isChecking: false,
+    checkedAtMs: Date.now(),
+    duplicateOfAccountId: conflict.otherAccount.id,
+    duplicateReason: conflict.reason,
+    message: conflict.message
+  };
+  latestResults[accountId] = null;
+  updateAccount(accountId, { liveEnabled: false });
+}
+
+function getActiveTheme() {
+  return THEMES[preferences.themeColor] || THEMES.cool;
+}
+
+function getThemeColors() {
+  return getActiveTheme().barColors;
 }
 
 function renderSettingsView() {
@@ -297,7 +427,6 @@ function renderSettingsView() {
       <div class="settings-global-card">
         <div class="settings-global-copy">
           <span class="setting-name">Always On Top</span>
-          <span class="setting-meta">Keep the widget above other windows.</span>
         </div>
         <button
           id="alwaysOnTopToggle"
@@ -316,7 +445,6 @@ function renderSettingsView() {
       <div class="settings-global-card">
         <div class="settings-global-copy">
           <span class="setting-name">Launch On Startup</span>
-          <span class="setting-meta">Start the widget automatically when you sign in to Windows.</span>
         </div>
         <button
           id="launchOnStartupToggle"
@@ -352,17 +480,12 @@ function renderSettingsView() {
       <div class="settings-global-card settings-global-card-actions">
         <div class="settings-global-copy">
           <span class="setting-name">Quota Refresh</span>
-          <span class="setting-meta">Retry live sync for every configured account.</span>
         </div>
         <button id="resyncAllBtn" type="button" class="secondary-btn secondary-btn-compact">Resync All</button>
       </div>
       <div class="settings-list">
         ${buildSettingsMarkup()}
       </div>
-      <button id="addAccountBtn" type="button" class="add-btn">
-        ${getPlusIcon()}
-        Add Account
-      </button>
       ${buildStatusNoteMarkup()}
     </div>
   `;
@@ -371,11 +494,6 @@ function renderSettingsView() {
     event.stopPropagation();
     isSettingsMode = false;
     render();
-  });
-
-  document.getElementById("addAccountBtn")?.addEventListener("click", (event) => {
-    event.stopPropagation();
-    addAccount();
   });
 
   document.getElementById("alwaysOnTopToggle")?.addEventListener("click", async (event) => {
@@ -402,58 +520,10 @@ function renderSettingsView() {
 }
 
 function bindSettingsEvents() {
-  document.querySelectorAll(".setting-row-draggable").forEach((rowEl) => {
-    rowEl.addEventListener("dragstart", handleSettingDragStart);
-    rowEl.addEventListener("dragover", handleSettingDragOver);
-    rowEl.addEventListener("drop", handleSettingDrop);
-    rowEl.addEventListener("dragend", handleSettingDragEnd);
-  });
-
-  accounts.forEach((account, index) => {
-    document.getElementById(`move-up-${account.id}`)?.addEventListener("click", (event) => {
-      event.stopPropagation();
-      moveAccountByDelta(account.id, -1);
-    });
-
-    document.getElementById(`move-down-${account.id}`)?.addEventListener("click", (event) => {
-      event.stopPropagation();
-      moveAccountByDelta(account.id, 1);
-    });
-
+  accounts.forEach((account) => {
     document.getElementById(`toggle-${account.id}`)?.addEventListener("click", (event) => {
       event.stopPropagation();
       expandedSettingId = expandedSettingId === account.id ? null : account.id;
-      render();
-    });
-
-    document.getElementById(`remove-${account.id}`)?.addEventListener("click", (event) => {
-      event.stopPropagation();
-      removeAccount(account.id);
-    });
-
-    const nameInput = document.getElementById(`name-${account.id}`);
-    nameInput?.addEventListener("input", (event) => {
-      updateAccount(account.id, {
-        name: event.target.value
-      });
-    });
-
-    const codexHomeInput = document.getElementById(`path-${account.id}`);
-    codexHomeInput?.addEventListener("input", (event) => {
-      const nextCodexHome = event.target.value;
-      updateAccount(account.id, {
-        codexHome: nextCodexHome,
-        liveEnabled: false
-      });
-      clearAccountRuntimeState(account.id);
-    });
-
-    document.getElementById(`default-${account.id}`)?.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const suggestedPath = suggestCodexHome(index);
-      updateAccount(account.id, { codexHome: suggestedPath, liveEnabled: account.id === accounts[0]?.id });
-      clearAccountRuntimeState(account.id);
-      setStatus("Default CODEX_HOME restored.", "ok");
       render();
     });
 
@@ -474,111 +544,22 @@ function bindSettingsEvents() {
   });
 }
 
-function handleSettingDragStart(event) {
-  const accountId = event.currentTarget?.dataset?.accountId;
-  if (!accountId) {
-    return;
-  }
-
-  draggedSettingId = accountId;
-  dropTargetSettingId = accountId;
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", accountId);
-  }
-  updateSettingDropTargetHighlight();
-}
-
-function handleSettingDragOver(event) {
-  event.preventDefault();
-  const accountId = event.currentTarget?.dataset?.accountId;
-  if (!accountId) {
-    return;
-  }
-
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = "move";
-  }
-
-  if (dropTargetSettingId !== accountId) {
-    dropTargetSettingId = accountId;
-    updateSettingDropTargetHighlight();
-  }
-}
-
-function handleSettingDrop(event) {
-  event.preventDefault();
-  const targetAccountId = event.currentTarget?.dataset?.accountId;
-  if (!draggedSettingId || !targetAccountId || draggedSettingId === targetAccountId) {
-    draggedSettingId = null;
-    dropTargetSettingId = null;
-    updateSettingDropTargetHighlight();
-    return;
-  }
-
-  reorderAccounts(draggedSettingId, targetAccountId);
-  draggedSettingId = null;
-  dropTargetSettingId = null;
-  updateSettingDropTargetHighlight();
-  setStatus("Account order updated.", "ok");
-  render();
-}
-
-function handleSettingDragEnd() {
-  draggedSettingId = null;
-  dropTargetSettingId = null;
-  updateSettingDropTargetHighlight();
-}
-
-function updateSettingDropTargetHighlight() {
-  document.querySelectorAll(".setting-card[data-account-id]").forEach((cardEl) => {
-    const accountId = cardEl.getAttribute("data-account-id");
-    cardEl.classList.toggle("is-drop-target", Boolean(dropTargetSettingId) && accountId === dropTargetSettingId);
-  });
-}
-
-function reorderAccounts(sourceId, targetId) {
-  const sourceIndex = accounts.findIndex((account) => account.id === sourceId);
-  const targetIndex = accounts.findIndex((account) => account.id === targetId);
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
-    return;
-  }
-
-  const nextAccounts = [...accounts];
-  const [movedAccount] = nextAccounts.splice(sourceIndex, 1);
-  nextAccounts.splice(targetIndex, 0, movedAccount);
-  accounts = nextAccounts;
-  saveAccounts();
-}
-
-function moveAccountByDelta(accountId, delta) {
-  const sourceIndex = accounts.findIndex((account) => account.id === accountId);
-  const targetIndex = sourceIndex + delta;
-  if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= accounts.length) {
-    return;
-  }
-
-  reorderAccounts(accountId, accounts[targetIndex].id);
-  setStatus("Account order updated.", "ok");
-  render();
-}
-
 function buildOverallBarMarkup() {
-  if (accounts.length === 0) {
+  const displayAccounts = accounts;
+  const themeColors = getThemeColors();
+  if (displayAccounts.length === 0) {
     return `
       <span class="overall-segment" style="width:100%;">
-        <span class="overall-segment-fill" style="width:0%;background:${COLORS[0]};"></span>
+        <span class="overall-segment-fill" style="width:0%;background:${themeColors[0]};"></span>
       </span>
     `;
   }
 
-  const totalWeight = accounts.reduce((sum, account) => sum + getAccountWeight(account), 0) || accounts.length;
-
-  return accounts
+  return displayAccounts
     .map((account, index) => {
       const percentage = getRemainingPercentForAccount(account) ?? 0;
-      const width = (getAccountWeight(account) / totalWeight) * 100;
-      const color = COLORS[index % COLORS.length];
+      const width = 100 / displayAccounts.length;
+      const color = themeColors[index % themeColors.length];
 
       return `
         <span class="overall-segment" style="width:${width}%;">
@@ -590,23 +571,26 @@ function buildOverallBarMarkup() {
 }
 
 function buildAccountsMarkup() {
-  if (accounts.length === 0) {
+  const displayAccounts = accounts;
+  const themeColors = getThemeColors();
+  if (displayAccounts.length === 0) {
     return `<div class="panel-empty">No accounts configured.</div>`;
   }
 
   return `
     <div class="accounts-list">
-      ${accounts
+      ${displayAccounts
         .map((account, index) => {
           const remainingPercentage = getRemainingPercentForAccount(account);
           const percentage = remainingPercentage ?? 0;
-          const color = COLORS[index % COLORS.length];
+          const color = themeColors[index % themeColors.length];
           const valueLabel = getAccountValueLabel(account, remainingPercentage);
+          const displayName = getAccountDisplayName(account);
 
           return `
             <div class="account-item">
               <div class="account-row">
-                <span class="account-name">${escapeHtml(account.name)}</span>
+                <span class="account-name">${escapeHtml(displayName)}</span>
                 <span class="account-value">
                   ${escapeHtml(valueLabel)}
                 </span>
@@ -633,85 +617,54 @@ function buildSettingsMarkup() {
       const isOpen = expandedSettingId === account.id;
       const status = profileStatuses[account.id];
       const statusSummary = getSettingsSummary(account, status);
+      const displayName = getAccountDisplayName(account);
 
       return `
         <div
-          class="setting-card ${isOpen ? "is-open" : ""} ${dropTargetSettingId === account.id ? "is-drop-target" : ""}"
+          class="setting-card ${isOpen ? "is-open" : ""}"
           data-account-id="${escapeHtmlAttribute(account.id)}"
         >
-          <div
-            class="setting-row setting-row-draggable"
-            data-account-id="${escapeHtmlAttribute(account.id)}"
-            draggable="true"
-            aria-label="Drag to reorder ${escapeHtmlAttribute(account.name)}"
-          >
+          <div class="setting-row" data-account-id="${escapeHtmlAttribute(account.id)}">
             <div class="setting-copy">
-              <span class="setting-name">${escapeHtml(account.name)}</span>
+              <span class="setting-name">${escapeHtml(displayName)}</span>
               <span class="setting-meta">${escapeHtml(statusSummary)}</span>
             </div>
             <div class="setting-actions">
               <button
-                id="move-up-${account.id}"
-                type="button"
-                class="list-action-btn"
-                aria-label="Move ${escapeHtml(account.name)} up"
-                ${index === 0 ? "disabled" : ""}
-              >
-                ${getChevronUpIcon()}
-              </button>
-              <button
-                id="move-down-${account.id}"
-                type="button"
-                class="list-action-btn"
-                aria-label="Move ${escapeHtml(account.name)} down"
-                ${index === accounts.length - 1 ? "disabled" : ""}
-              >
-                ${getChevronDownIcon()}
-              </button>
-              <button
                 id="toggle-${account.id}"
                 type="button"
                 class="list-action-btn"
-                aria-label="${isOpen ? "Collapse" : "Expand"} ${escapeHtml(account.name)}"
+                aria-label="${isOpen ? "Collapse" : "Expand"} ${escapeHtml(displayName)}"
               >
                 ${isOpen ? getChevronUpIcon() : getChevronDownIcon()}
               </button>
-              <button
-                id="remove-${account.id}"
-                type="button"
-                class="list-action-btn is-danger"
-                aria-label="Remove ${escapeHtml(account.name)}"
-              >
-                ${getTrashIcon()}
-              </button>
             </div>
           </div>
-          ${isOpen ? buildSettingsDetailMarkup(account, index, status) : ""}
+          ${isOpen ? buildSettingsDetailMarkup(account, status) : ""}
         </div>
       `;
     })
     .join("");
 }
 
-function buildSettingsDetailMarkup(account, index, status) {
+function buildSettingsDetailMarkup(account, status) {
   const steps = getSetupSteps(account, status);
   const isChecking = Boolean(status?.isChecking);
   const isSyncing = Boolean(latestResults[account.id]?.isLoading);
   const canOpenLogin = Boolean(account.codexHome.trim() && status?.cliInstalled);
   const canSync = Boolean(account.codexHome.trim());
+  const associatedEmail = getAssociatedProfileEmail(account.id);
+  const loginButtonLabel = status?.duplicateOfAccountId ? "Relogin" : "Open Login";
 
   return `
     <div class="setting-detail">
       <div class="field-group">
-        <label class="field-label" for="name-${account.id}">Display Name</label>
-        <input id="name-${account.id}" class="field-input" type="text" value="${escapeHtmlAttribute(account.name)}" />
+        <span class="field-label">Profile Folder</span>
+        <div class="field-input field-input-mono field-input-readonly">${escapeHtml(account.codexHome)}</div>
       </div>
       <div class="field-group">
-        <div class="field-label-row">
-          <label class="field-label" for="path-${account.id}">CODEX_HOME</label>
-          <button id="default-${account.id}" type="button" class="inline-link-btn">Default path</button>
-        </div>
-        <input id="path-${account.id}" class="field-input field-input-mono" type="text" value="${escapeHtmlAttribute(account.codexHome)}" />
+        <span class="field-label">Signed-in Email</span>
+        <div class="field-input field-input-readonly">${escapeHtml(associatedEmail || "--")}</div>
       </div>
       <div class="setup-list">
         ${steps
@@ -733,14 +686,14 @@ function buildSettingsDetailMarkup(account, index, status) {
           ${isChecking ? "Checking..." : "Check Setup"}
         </button>
         <button id="login-${account.id}" type="button" class="secondary-btn" ${canOpenLogin ? "" : "disabled"}>
-          Open Login
+          ${loginButtonLabel}
         </button>
         <button id="sync-${account.id}" type="button" class="primary-btn" ${canSync && !isSyncing ? "" : "disabled"}>
           ${isSyncing ? "Syncing..." : "Sync Now"}
         </button>
       </div>
       <div class="helper-note">
-        ${escapeHtml(getHelperText(account, status, index))}
+        ${escapeHtml(getHelperText(account, status))}
       </div>
     </div>
   `;
@@ -748,6 +701,15 @@ function buildSettingsDetailMarkup(account, index, status) {
 
 function getSetupSteps(account, status) {
   const profileStatus = status || {};
+  const duplicateMessage = profileStatus.duplicateOfAccountId ? profileStatus.message : "";
+  const associatedEmail = getAssociatedProfileEmail(account.id);
+  const signInText = account.codexHome.trim()
+    ? profileStatus.authExists
+      ? associatedEmail
+        ? `Logged in as ${associatedEmail} at ${account.codexHome.trim()}.`
+        : `Logged in at ${account.codexHome.trim()}.`
+      : "Use Open Login to run codex login for this fixed profile folder."
+    : "Profile folder is unavailable.";
 
   return [
     {
@@ -759,36 +721,40 @@ function getSetupSteps(account, status) {
     },
     {
       title: "Sign into this profile",
-      text: account.codexHome.trim()
-        ? profileStatus.authExists
-          ? `Logged in at ${account.codexHome.trim()}.`
-          : "Use Open Login to run codex login with this CODEX_HOME."
-        : "Set a CODEX_HOME path for this account first.",
+      text: signInText,
       stateClass: profileStatus.authExists ? "is-complete" : account.codexHome.trim() ? "is-warning" : "is-idle"
     },
     {
       title: "Sync live quota",
-      text: latestResults[account.id]?.ok
-        ? "Live quota synced. The widget is using Codex data now."
-        : latestResults[account.id]?.isLoading
-          ? "Sync in progress."
-          : account.liveEnabled
-            ? "This account will auto-refresh live quota."
-            : "This account will sync automatically when the widget opens.",
-      stateClass: latestResults[account.id]?.ok ? "is-complete" : latestResults[account.id]?.isLoading ? "is-warning" : "is-idle"
+      text: duplicateMessage
+        ? `${duplicateMessage} Use Relogin to switch this folder to a different account.`
+        : latestResults[account.id]?.ok
+          ? "Live quota synced. The widget is using Codex data now."
+          : latestResults[account.id]?.isLoading
+            ? "Sync in progress."
+            : account.liveEnabled
+              ? "This account will auto-refresh live quota."
+              : "This account will sync automatically when the widget opens.",
+      stateClass: duplicateMessage
+        ? "is-warning"
+        : latestResults[account.id]?.ok
+          ? "is-complete"
+          : latestResults[account.id]?.isLoading
+            ? "is-warning"
+            : "is-idle"
     }
   ];
 }
 
-function getHelperText(account, status, index) {
-  if (!account.codexHome.trim()) {
-    return `Suggested path: ${suggestCodexHome(index) || "Set a profile path manually."}`;
-  }
-
+function getHelperText(account, status) {
   if (status?.ready) {
     return account.liveEnabled
       ? "This profile is connected. Sync now to refresh live quota immediately."
       : "This profile is ready. It will sync automatically when the widget opens.";
+  }
+
+  if (status?.duplicateOfAccountId) {
+    return `${status.message || "This Codex profile is already assigned to another account slot."} Use Relogin to sign this folder into a different account.`;
   }
 
   if (!status?.cliInstalled) {
@@ -796,7 +762,7 @@ function getHelperText(account, status, index) {
   }
 
   if (!status?.authExists) {
-    return "Open Login starts a terminal window with CODEX_HOME set for this account.";
+    return `Open Login starts Codex login for ${account.codexHome}.`;
   }
 
   return status?.message || "Use Check Setup to refresh this account state.";
@@ -804,133 +770,28 @@ function getHelperText(account, status, index) {
 
 function normalizeDefaultAccounts(rawAccounts) {
   const base = Array.isArray(rawAccounts) && rawAccounts.length > 0 ? rawAccounts : [];
-  const length = Math.max(base.length, SAMPLE_ACCOUNT_SEEDS.length, 3);
+  const length = FIXED_ACCOUNT_COUNT;
 
   return Array.from({ length }, (_, index) => ({
-    name: base[index]?.name || `Account ${index + 1}`,
+    name: base[index]?.name || `Profile ${index + 1}`,
     codexHome: typeof base[index]?.codexHome === "string" ? base[index].codexHome.trim() : ""
   }));
 }
 
+function clearObsoleteAccountStorage() {
+  OBSOLETE_ACCOUNT_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+}
+
 function buildInitialAccounts(fallbackDefaults) {
-  return Array.from({ length: Math.max(SAMPLE_ACCOUNT_SEEDS.length, fallbackDefaults.length, 3) }, (_, index) => {
-    const sampleSeed = SAMPLE_ACCOUNT_SEEDS[index] || makeSampleSeed(index);
+  return Array.from({ length: FIXED_ACCOUNT_COUNT }, (_, index) => {
     const defaultAccount = fallbackDefaults[index] || { codexHome: "" };
     const resolvedCodexHome = defaultAccount.codexHome || "";
 
     return {
-      id: createId(index),
-      name: `Account ${index + 1}`,
+      id: createAccountId(index),
+      name: defaultAccount.name || `Profile ${index + 1}`,
       codexHome: resolvedCodexHome,
-      liveEnabled: Boolean(resolvedCodexHome),
-      sampleUsed: 0,
-      sampleLimit: 1000,
-      sampleResetDate: createResetDate(30)
-    };
-  });
-}
-
-function loadStoredAccounts(fallbackDefaults) {
-  try {
-    const { raw, isLegacy } = readStoredAccounts();
-    if (!raw) {
-      return hydrateDynamicDefaults(buildInitialAccounts(fallbackDefaults), fallbackDefaults);
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return hydrateDynamicDefaults(buildInitialAccounts(fallbackDefaults), fallbackDefaults);
-    }
-
-    const sanitized = parsed
-      .map((account, index) =>
-        sanitizeAccount(account, index, fallbackDefaults[index], {
-          isLegacy
-        })
-      )
-      .filter(Boolean);
-
-    return sanitized.length > 0
-      ? hydrateDynamicDefaults(sanitized, fallbackDefaults)
-      : hydrateDynamicDefaults(buildInitialAccounts(fallbackDefaults), fallbackDefaults);
-  } catch {
-    return hydrateDynamicDefaults(buildInitialAccounts(fallbackDefaults), fallbackDefaults);
-  }
-}
-
-function readStoredAccounts() {
-  const current = localStorage.getItem(STORAGE_KEY);
-  if (current) {
-    return { raw: current, isLegacy: false };
-  }
-
-  for (const key of LEGACY_STORAGE_KEYS) {
-    const legacy = localStorage.getItem(key);
-    if (legacy) {
-      return { raw: legacy, isLegacy: true };
-    }
-  }
-
-  return { raw: null, isLegacy: false };
-}
-
-function sanitizeAccount(account, index, fallbackDefault, options = {}) {
-  if (!account || typeof account !== "object") {
-    return null;
-  }
-
-  const seed = SAMPLE_ACCOUNT_SEEDS[index] || makeSampleSeed(index);
-  const sampleUsed = Number(account.sampleUsed ?? account.used);
-  const sampleLimit = Number(account.sampleLimit ?? account.limit);
-  const sampleResetDate =
-    typeof account.sampleResetDate === "string"
-      ? account.sampleResetDate
-      : typeof account.resetDate === "string"
-        ? account.resetDate
-        : createResetDate(seed.resetOffsetDays);
-
-  const sanitized = {
-    id: typeof account.id === "string" && account.id.trim() ? account.id.trim() : createId(index),
-    name:
-      typeof account.name === "string" && account.name.trim()
-        ? account.name.trim()
-        : seed.name || `Account ${index + 1}`,
-    codexHome:
-      typeof account.codexHome === "string" && account.codexHome.trim()
-        ? account.codexHome.trim()
-        : fallbackDefault?.codexHome || "",
-    liveEnabled: typeof account.liveEnabled === "boolean" ? account.liveEnabled : index === 0,
-    sampleUsed: Number.isFinite(sampleUsed) && sampleUsed >= 0 ? sampleUsed : seed.used,
-    sampleLimit: Number.isFinite(sampleLimit) && sampleLimit > 0 ? sampleLimit : seed.limit,
-    sampleResetDate
-  };
-
-  if (options.isLegacy && index > 0) {
-    return {
-      ...sanitized,
-      name: `Account ${index + 1}`,
-      codexHome: "",
-      liveEnabled: false,
-      sampleUsed: 0,
-      sampleLimit: 1000,
-      sampleResetDate: createResetDate(30)
-    };
-  }
-
-  return sanitized;
-}
-
-function hydrateDynamicDefaults(accountList, fallbackDefaults) {
-  return accountList.map((account, index) => {
-    const suggestedCodexHome =
-      typeof account.codexHome === "string" && account.codexHome.trim()
-        ? account.codexHome.trim()
-        : fallbackDefaults[index]?.codexHome || suggestCodexHome(index);
-
-    return {
-      ...account,
-      codexHome: suggestedCodexHome,
-      liveEnabled: suggestedCodexHome ? true : Boolean(account.liveEnabled)
+      liveEnabled: Boolean(resolvedCodexHome)
     };
   });
 }
@@ -945,16 +806,6 @@ function ensureMapForAccounts(accountList, currentMap) {
 
 function updateAccount(accountId, patch) {
   accounts = accounts.map((account) => (account.id === accountId ? { ...account, ...patch } : account));
-  saveAccounts();
-}
-
-function clearAccountRuntimeState(accountId) {
-  latestResults[accountId] = null;
-  profileStatuses[accountId] = null;
-}
-
-function saveAccounts() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
 }
 
 function loadPreferences() {
@@ -964,7 +815,8 @@ function loadPreferences() {
       return {
         alwaysOnTop: false,
         launchOnStartup: false,
-        glassOpacity: 100
+        glassOpacity: 100,
+        themeColor: "cool"
       };
     }
 
@@ -972,13 +824,15 @@ function loadPreferences() {
     return {
       alwaysOnTop: Boolean(parsed?.alwaysOnTop),
       launchOnStartup: Boolean(parsed?.launchOnStartup),
-      glassOpacity: clampGlassOpacity(parsed?.glassOpacity)
+      glassOpacity: clampGlassOpacity(parsed?.glassOpacity),
+      themeColor: clampThemeColor(parsed?.themeColor)
     };
   } catch {
     return {
       alwaysOnTop: false,
       launchOnStartup: false,
-      glassOpacity: 100
+      glassOpacity: 100,
+      themeColor: "cool"
     };
   }
 }
@@ -990,8 +844,12 @@ function savePreferences() {
 function applyMaterialPreferences() {
   const normalizedOpacity = (preferences.glassOpacity || 100) / 100;
   const highlightOpacity = Math.max(0.68, Math.min(1.02, 1.02 - (normalizedOpacity - 1) * 0.55));
+  const theme = getActiveTheme();
   document.documentElement.style.setProperty("--glass-base-opacity", String(normalizedOpacity));
   document.documentElement.style.setProperty("--glass-highlight-opacity", String(highlightOpacity));
+  document.documentElement.style.setProperty("--accent-rgb", theme.accentRgb);
+  document.documentElement.style.setProperty("--accent-soft-rgb", theme.accentSoftRgb);
+  document.documentElement.style.setProperty("--accent-hover-rgb", theme.accentHoverRgb);
   const valueEl = document.getElementById("glassOpacityValue");
   if (valueEl) {
     valueEl.textContent = `${preferences.glassOpacity}%`;
@@ -1089,57 +947,27 @@ function clampGlassOpacity(value) {
   return Math.min(130, Math.max(70, Math.round(numeric)));
 }
 
-function addAccount() {
-  const nextIndex = accounts.length;
-  const seed = SAMPLE_ACCOUNT_SEEDS[nextIndex] || makeSampleSeed(nextIndex);
-  const account = {
-    id: createId(nextIndex),
-    name: `Account ${nextIndex + 1}`,
-    codexHome: suggestCodexHome(nextIndex),
-    liveEnabled: false,
-    sampleUsed: seed.used,
-    sampleLimit: seed.limit,
-    sampleResetDate: createResetDate(seed.resetOffsetDays)
-  };
-
-  accounts = [...accounts, account];
-  latestResults = ensureMapForAccounts(accounts, latestResults);
-  profileStatuses = ensureMapForAccounts(accounts, profileStatuses);
-  expandedSettingId = account.id;
-  saveAccounts();
-  setStatus("Sample account added. Configure CODEX_HOME to connect live quota.", "ok");
-  render();
-}
-
-function removeAccount(accountId) {
-  accounts = accounts.filter((account) => account.id !== accountId);
-  delete latestResults[accountId];
-  delete profileStatuses[accountId];
-  if (expandedSettingId === accountId) {
-    expandedSettingId = accounts[0]?.id || null;
-  }
-  saveAccounts();
-  setStatus("Account removed.", "ok");
-  render();
+function clampThemeColor(value) {
+  return Object.prototype.hasOwnProperty.call(THEMES, value) ? value : "cool";
 }
 
 async function refreshProfileStates(options = {}) {
-  await Promise.all(accounts.map((account) => checkProfileStatus(account.id, { syncIfReady: options.syncReadyAccounts })));
+  for (const account of accounts) {
+    await checkProfileStatus(account.id, { syncIfReady: options.syncReadyAccounts });
+  }
   updateGlobalStatus();
   render();
 }
 
 async function refreshReadyAccounts() {
-  await Promise.all(
-    accounts.map(async (account) => {
-      const status = profileStatuses[account.id];
-      if (!status?.ready || !account.liveEnabled) {
-        return;
-      }
+  for (const account of accounts) {
+    const status = profileStatuses[account.id];
+    if (!status?.ready || !account.liveEnabled) {
+      continue;
+    }
 
-      await refreshAccount(account.id);
-    })
-  );
+    await refreshAccount(account.id);
+  }
 
   updateGlobalStatus();
   render();
@@ -1159,13 +987,21 @@ async function checkProfileStatus(accountId, options = {}) {
 
   try {
     const response = await window.quotaApi.getProfileStatus({ codexHome: account.codexHome });
+    const duplicateConflict = findDuplicateProfileConflict(accountId, {
+      codexHome: response?.codexHome || account.codexHome,
+      profileEmail: response?.profileEmail
+    });
+    if (duplicateConflict) {
+      applyDuplicateProfileConflict(accountId, response, duplicateConflict);
+      setStatus(duplicateConflict.message, "error");
+      return;
+    }
+
     profileStatuses[accountId] = {
       ...response,
       isChecking: false,
       checkedAtMs: Date.now()
     };
-    syncAccountIdentity(accountId, response?.profileEmail);
-
     if (response?.ready && options.syncIfReady) {
       await refreshAccount(accountId);
     } else if (!response?.ready) {
@@ -1208,6 +1044,7 @@ async function refreshAccount(accountId) {
   if (!account || !account.codexHome.trim()) {
     return;
   }
+  const displayName = getAccountDisplayName(account);
   const liveEntry = latestResults[accountId];
   if (liveEntry?.isLoading) {
     return;
@@ -1222,6 +1059,19 @@ async function refreshAccount(accountId) {
 
   try {
     const response = await window.quotaApi.fetchRateLimits({ codexHome: account.codexHome });
+    const duplicateConflict = findDuplicateProfileConflict(accountId, {
+      codexHome: account.codexHome,
+      profileEmail: response?.profileEmail
+    });
+    if (duplicateConflict) {
+      applyDuplicateProfileConflict(accountId, {
+        ...(profileStatuses[accountId] || {}),
+        profileEmail: response?.profileEmail || null
+      }, duplicateConflict);
+      setStatus(duplicateConflict.message, "error");
+      return;
+    }
+
     if (!response?.ok) {
       latestResults[accountId] = {
         ok: false,
@@ -1229,7 +1079,7 @@ async function refreshAccount(accountId) {
         isLoading: false,
         updatedAtMs: Date.now()
       };
-      setStatus(`Live sync failed for ${account.name}. This account stays empty until sync succeeds.`, "error");
+      setStatus(`Live sync failed for ${displayName}. This account stays empty until sync succeeds.`, "error");
       return;
     }
 
@@ -1240,9 +1090,8 @@ async function refreshAccount(accountId) {
       isLoading: false,
       updatedAtMs: Date.now()
     };
-    syncAccountIdentity(accountId, response?.profileEmail);
     updateAccount(accountId, { liveEnabled: true });
-    setStatus(`Live quota synced for ${account.name}.`, "ok");
+    setStatus(`Live quota synced for ${getAccountDisplayName(account)}.`, "ok");
   } catch (error) {
     latestResults[accountId] = {
       ok: false,
@@ -1250,7 +1099,7 @@ async function refreshAccount(accountId) {
       isLoading: false,
       updatedAtMs: Date.now()
     };
-    setStatus(`Live sync failed for ${account.name}. This account stays empty until sync succeeds.`, "error");
+    setStatus(`Live sync failed for ${displayName}. This account stays empty until sync succeeds.`, "error");
   }
 }
 
@@ -1263,7 +1112,7 @@ async function openLoginForAccount(accountId) {
   await checkProfileStatus(accountId, { syncIfReady: false });
   const status = profileStatuses[accountId];
   if (!account.codexHome.trim()) {
-    setStatus("Enter a CODEX_HOME path before opening login.", "error");
+    setStatus("Profile folder is unavailable.", "error");
     render();
     return;
   }
@@ -1282,7 +1131,7 @@ async function openLoginForAccount(accountId) {
       return;
     }
 
-    setStatus(`Opened Codex login terminal for ${account.name}. Finish login, then click Check Setup.`, "ok");
+    setStatus(`Opened Codex login terminal for ${getAccountDisplayName(account)}. Finish login, then click Check Setup.`, "ok");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Unable to open login terminal.", "error");
   }
@@ -1309,52 +1158,14 @@ function getRemainingPercentForAccount(account) {
   return clampPercent(100 - usedPercent);
 }
 
-function getAccountWeight(account) {
-  const liveEntry = latestResults[account.id];
-  if (liveEntry?.ok) {
-    return 1;
-  }
-
-  return 1;
-}
-
-function getLegacyAccountFooterText(account) {
-  const liveEntry = latestResults[account.id];
-  if (liveEntry?.isLoading) {
-    return "Syncing live quota...";
-  }
-
-  if (liveEntry?.ok) {
-    const resetSeconds = liveEntry.rateLimits?.secondary?.resetsAt;
-    if (typeof resetSeconds === "number") {
-      const resetDate = new Date(resetSeconds * 1000);
-      if (!Number.isNaN(resetDate.getTime())) {
-        return `Live data · Resets ${resetDate.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
-        return `Live data - Resets ${resetDate.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
-      }
-    }
-
-    return "Live data";
-  }
-
-  if (liveEntry?.error) {
-    if (shouldUseSampleFallback(account)) {
-      return "Sample data fallback";
-    }
-
-    return "Not connected";
-  }
-
-  if (shouldUseSampleFallback(account)) {
-    return `Sample data - Resets ${formatSampleReset(account.sampleResetDate)}`;
-  }
-
-  return "Not connected";
-}
-
 function getSettingsSummary(account, status) {
+  const associatedEmail = getAssociatedProfileEmail(account.id);
+  if (status?.duplicateOfAccountId) {
+    return associatedEmail ? `Duplicate account - ${associatedEmail}` : "Duplicate account - Relogin required";
+  }
+
   if (latestResults[account.id]?.ok) {
-    return "Connected - Live quota synced";
+    return associatedEmail ? `Connected - ${associatedEmail}` : "Connected - Live quota synced";
   }
 
   if (latestResults[account.id]?.error) {
@@ -1366,15 +1177,19 @@ function getSettingsSummary(account, status) {
   }
 
   if (!account.codexHome.trim()) {
-    return "Not connected - Add a CODEX_HOME path";
+    return "Profile folder unavailable";
   }
 
   if (status?.ready) {
-    return account.liveEnabled ? "Connected - Awaiting refresh" : "Ready - Auto-syncs on open";
+    return associatedEmail
+      ? `Ready - ${associatedEmail}`
+      : account.liveEnabled
+        ? "Connected - Awaiting refresh"
+        : "Ready - Auto-syncs on open";
   }
 
   if (status?.authExists) {
-    return "Logged in - Run sync";
+    return associatedEmail ? `Logged in - ${associatedEmail}` : "Logged in - Run sync";
   }
 
   if (status?.cliInstalled) {
@@ -1444,19 +1259,16 @@ function getResetCountdownText(date) {
   return `Resets ${hours}h ${String(minutes).padStart(2, "0")}m`;
 }
 
-function formatSampleReset(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "unknown";
-  }
-
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 function updateGlobalStatus() {
   const liveCount = accounts.filter((account) => latestResults[account.id]?.ok).length;
   const readyCount = accounts.filter((account) => profileStatuses[account.id]?.ready).length;
   const failedCount = accounts.filter((account) => latestResults[account.id]?.error).length;
+  const duplicateCount = accounts.filter((account) => profileStatuses[account.id]?.duplicateOfAccountId).length;
+
+  if (duplicateCount > 0) {
+    setStatus(`Duplicate Codex profile detected for ${duplicateCount}/${accounts.length} account${accounts.length === 1 ? "" : "s"}.`, "error");
+    return;
+  }
 
   if (liveCount > 0) {
     setStatus("", "neutral");
@@ -1499,34 +1311,6 @@ function buildStatusNoteMarkup() {
   }
 
   return `<div class="status-note ${statusToneClass(statusTone)}">${escapeHtml(statusMessage)}</div>`;
-}
-
-function suggestCodexHome(index) {
-  const fallback = defaultAccounts[index];
-  if (fallback?.codexHome) {
-    return fallback.codexHome;
-  }
-
-  const firstPath = defaultAccounts[0]?.codexHome || "";
-  const match = firstPath.match(/^(.*[\\/])\.codex(?:-\d+)?$/i);
-  if (!match) {
-    return "";
-  }
-
-  return `${match[1]}.codex-${index + 1}`;
-}
-
-function makeSampleSeed(index) {
-  return {
-    name: `Account ${index + 1}`,
-    used: 0,
-    limit: 1000,
-    resetOffsetDays: 30
-  };
-}
-
-function createResetDate(offsetDays) {
-  return new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000).toISOString();
 }
 
 function queueWindowResize(durationMs = 0) {
@@ -1580,8 +1364,8 @@ function clampPercent(value) {
   return value;
 }
 
-function createId(seed) {
-  return globalThis.crypto?.randomUUID?.() || `account-${Date.now()}-${seed}-${Math.random().toString(16).slice(2, 8)}`;
+function createAccountId(index) {
+  return `profile-${index + 1}`;
 }
 
 function escapeHtml(value) {
@@ -1602,28 +1386,6 @@ function getSettingsIcon() {
     <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
       <path
         d="M19.14 12.94a7.96 7.96 0 0 0 .06-.94c0-.32-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.32 7.32 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.49-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54c-.58.23-1.12.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.7 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94s.02.63.06.94L2.82 14.52a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.4 1.05.72 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.84a.5.5 0 0 0 .49-.42l.36-2.54c.58-.23 1.12-.54 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"
-        fill="currentColor"
-      />
-    </svg>
-  `;
-}
-
-function getTrashIcon() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path
-        d="M9 3a1 1 0 0 0-.9.55L7.38 5H4a1 1 0 1 0 0 2h1l1 12a2 2 0 0 0 2 1.83h8a2 2 0 0 0 2-1.83L19 7h1a1 1 0 1 0 0-2h-3.38l-.72-1.45A1 1 0 0 0 15 3H9Zm-.99 4h7.98l-.92 11H8.93L8.01 7Zm2.99 2a1 1 0 0 0-1 1v5a1 1 0 1 0 2 0v-5a1 1 0 0 0-1-1Zm4 0a1 1 0 0 0-1 1v5a1 1 0 1 0 2 0v-5a1 1 0 0 0-1-1Z"
-        fill="currentColor"
-      />
-    </svg>
-  `;
-}
-
-function getPlusIcon() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path
-        d="M11 5a1 1 0 1 1 2 0v6h6a1 1 0 1 1 0 2h-6v6a1 1 0 1 1-2 0v-6H5a1 1 0 1 1 0-2h6V5Z"
         fill="currentColor"
       />
     </svg>

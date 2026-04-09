@@ -12,7 +12,9 @@
   --text: rgb(229, 231, 235);
   --text-soft: rgb(156, 163, 175);
   --text-faint: rgb(107, 114, 128);
-  --accent: rgb(96, 165, 250);
+  --accent-rgb: 96, 165, 250;
+  --accent-soft-rgb: 132, 196, 255;
+  --accent-hover-rgb: 147, 197, 253;
   --danger: rgb(248, 113, 113);
   --track: rgba(0, 0, 0, 0.4);
   --shadow: none;
@@ -118,14 +120,13 @@ button {
   width: 12px;
   height: 12px;
   display: inline-flex;
-  color: rgb(96, 165, 250);
+  color: rgb(var(--accent-rgb));
 }
 
 .brand-icon svg,
 .summary-chevron svg,
 .icon-btn svg,
-.list-action-btn svg,
-.add-btn svg {
+.list-action-btn svg {
   width: 100%;
   height: 100%;
 }
@@ -202,20 +203,21 @@ button {
 }
 
 .expanded-panel {
-  max-height: 0;
+  height: 0;
   opacity: 0;
   overflow: hidden;
   pointer-events: none;
   border-top: 1px solid rgba(255, 255, 255, 0);
   background: linear-gradient(180deg, transparent, rgba(0, 0, 0, calc(0.2 * var(--glass-base-opacity))));
+  will-change: height, opacity;
   transition:
-    max-height 350ms cubic-bezier(0.16, 1, 0.3, 1),
+    height 350ms cubic-bezier(0.16, 1, 0.3, 1),
     opacity 350ms cubic-bezier(0.16, 1, 0.3, 1),
     border-top-color 160ms ease;
 }
 
 .expanded-panel.is-open {
-  max-height: 820px;
+  height: var(--expanded-panel-height, 0px);
   opacity: 1;
   pointer-events: auto;
   border-top-color: rgba(255, 255, 255, 0.04);
@@ -247,8 +249,7 @@ button {
 
 .icon-btn,
 .text-btn,
-.list-action-btn,
-.add-btn {
+.list-action-btn {
   appearance: none;
   border: 0;
   background: transparent;
@@ -290,11 +291,11 @@ button {
 .text-btn {
   padding: 0;
   font-size: 11px;
-  color: rgb(96, 165, 250);
+  color: rgb(var(--accent-rgb));
 }
 
 .text-btn:hover {
-  color: rgb(147, 197, 253);
+  color: rgb(var(--accent-hover-rgb));
 }
 
 .accounts-list {
@@ -381,9 +382,7 @@ button {
 }
 
 .settings-global-card + .settings-global-card,
-.settings-global-card + .settings-list,
-.settings-list + .add-btn,
-.add-btn + .status-note {
+.settings-global-card + .settings-list {
   margin-top: 10px;
 }
 
@@ -424,8 +423,8 @@ button {
 }
 
 .toggle-btn.is-on {
-  background: rgba(96, 165, 250, 0.3);
-  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(var(--accent-rgb), 0.3);
+  border-color: rgba(var(--accent-rgb), 0.42);
 }
 
 .toggle-btn-thumb {
@@ -476,13 +475,8 @@ button {
 }
 
 .setting-card.is-open {
-  border-color: rgba(96, 165, 250, calc(0.16 * var(--glass-highlight-opacity)));
+  border-color: rgba(var(--accent-rgb), calc(0.16 * var(--glass-highlight-opacity)));
   background: rgba(255, 255, 255, calc(0.04 * var(--glass-highlight-opacity)));
-}
-
-.setting-card.is-drop-target {
-  border-color: rgba(132, 196, 255, 0.42);
-  background: rgba(132, 196, 255, 0.08);
 }
 
 .slider-wrap {
@@ -495,7 +489,7 @@ button {
 .slider-input {
   flex: 1;
   margin: 0;
-  accent-color: rgb(132, 196, 255);
+  accent-color: rgb(var(--accent-soft-rgb));
 }
 
 .slider-value {
@@ -518,14 +512,6 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-}
-
-.setting-row-draggable {
-  cursor: grab;
-}
-
-.setting-row-draggable:active {
-  cursor: grabbing;
 }
 
 .setting-copy {
@@ -568,8 +554,7 @@ button {
   pointer-events: none;
 }
 
-.list-action-btn svg,
-.add-btn svg {
+.list-action-btn svg {
   width: 12px;
   height: 12px;
 }
@@ -597,13 +582,6 @@ button {
   gap: 6px;
 }
 
-.field-label-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .field-label {
   font-size: 9px;
   letter-spacing: 0.08em;
@@ -623,7 +601,7 @@ button {
 }
 
 .field-input:focus {
-  border-color: rgba(96, 165, 250, 0.42);
+  border-color: rgba(var(--accent-rgb), 0.42);
   background: rgba(255, 255, 255, 0.05);
 }
 
@@ -632,18 +610,22 @@ button {
   font-size: 10px;
 }
 
+.field-input-readonly {
+  cursor: default;
+}
+
 .inline-link-btn {
   appearance: none;
   border: 0;
   padding: 0;
   background: transparent;
-  color: rgb(96, 165, 250);
+  color: rgb(var(--accent-rgb));
   font-size: 10px;
   cursor: pointer;
 }
 
 .inline-link-btn:hover {
-  color: rgb(147, 197, 253);
+  color: rgb(var(--accent-hover-rgb));
 }
 
 .setup-list {
@@ -691,8 +673,8 @@ button {
 }
 
 .setup-step.is-complete .setup-step-index {
-  background: rgba(96, 165, 250, 0.18);
-  color: rgb(147, 197, 253);
+  background: rgba(var(--accent-rgb), 0.18);
+  color: rgb(var(--accent-hover-rgb));
 }
 
 .setup-step.is-warning .setup-step-index {
@@ -729,14 +711,14 @@ button {
 }
 
 .primary-btn {
-  border: 1px solid rgba(96, 165, 250, 0.24);
-  background: rgba(96, 165, 250, 0.14);
-  color: rgb(191, 219, 254);
+  border: 1px solid rgba(var(--accent-rgb), 0.24);
+  background: rgba(var(--accent-rgb), 0.14);
+  color: rgb(var(--accent-soft-rgb));
 }
 
 .primary-btn:hover:not(:disabled) {
-  background: rgba(96, 165, 250, 0.22);
-  color: rgb(219, 234, 254);
+  background: rgba(var(--accent-rgb), 0.22);
+  color: rgb(var(--accent-hover-rgb));
 }
 
 .secondary-btn:disabled,
@@ -749,27 +731,6 @@ button {
   font-size: 10px;
   line-height: 1.4;
   color: var(--text-faint);
-}
-
-.add-btn {
-  width: 100%;
-  margin-top: 16px;
-  padding: 8px 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  color: rgb(209, 213, 219);
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.add-btn:hover {
-  color: rgb(229, 231, 235);
-  background: rgba(255, 255, 255, 0.08);
 }
 
 .panel-empty {
@@ -788,7 +749,7 @@ button {
 }
 
 .status-note.is-ok {
-  color: rgb(147, 197, 253);
+  color: rgb(var(--accent-hover-rgb));
 }
 
 .status-note.is-error {

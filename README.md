@@ -1,6 +1,6 @@
 # AI Battery
 
-Frameless Electron desktop widget for monitoring Codex weekly quota across multiple local `CODEX_HOME` profiles.
+Frameless Electron desktop widget for monitoring Codex weekly quota across three fixed local Codex profile folders.
 
 ## Platform
 
@@ -14,15 +14,15 @@ The macOS code path is implemented, but the final UX still needs real-device ver
 
 ## What It Does
 
-- Tracks weekly remaining quota for multiple Codex profiles in one floating desktop widget
+- Tracks weekly remaining quota for three fixed Codex profiles in one floating desktop widget
 - Auto-syncs ready accounts when the widget opens, then refreshes every 5 minutes
 - Keeps unsynced or failed accounts empty instead of showing fake quota
-- Supports dynamic account management: add, remove, and reorder accounts from Settings
-- Supports per-profile setup with custom `CODEX_HOME` paths
-- Automatically recovers the common default profile folders like `.codex`, `.codex-2`, `.codex-3`, and higher `.codex-N` suggestions as you add accounts
+- Uses these fixed profile paths in order: `.codex`, `.codex-2`, `.codex-3`
+- Blocks duplicate connections when two fixed profile folders are signed into the same Codex account
+- Shows the signed-in email for each fixed profile and prompts you to relogin if a duplicate account is detected
+- Uses the signed-in email as the visible account label whenever that profile has been identified
 - Includes manual `Resync All` and per-account retry from Settings
-- Lets you drag and reorder accounts from Settings
-- Expands taller in Settings so account setup has more visible workspace
+- Expands taller in Settings so each fixed profile has room for setup and sync actions
 
 ## Quick Start
 
@@ -35,7 +35,7 @@ The macOS code path is implemented, but the final UX still needs real-device ver
 3. Start the widget on your current platform:
    `npm start`
 4. Open Settings in the widget.
-5. For each account you want to use, set a `CODEX_HOME` path.
+5. Use the fixed profiles `.codex`, `.codex-2`, and `.codex-3`.
 6. If that profile is not logged in yet, click `Open Login`, finish `codex login` in the terminal window, then return to the widget.
 7. Click `Check Setup` once if needed.
 8. Reopen the widget or click `Sync Now` to fetch live quota immediately.
@@ -44,26 +44,40 @@ Ready accounts now auto-sync whenever the widget opens, and then refresh again e
 
 Important: AI Battery is tray-based. Closing or minimizing the window hides it instead of quitting. Reopen it from the tray icon, and use the tray menu to quit fully.
 
-## What `CODEX_HOME` Means
+## Fixed Profile Folders
 
-`CODEX_HOME` is the folder Codex uses to store the local login/session data for one account profile. Using a different `CODEX_HOME` path lets this widget track a different Codex account. Typical paths look like `C:\Users\<you>\.codex`, `C:\Users\<you>\.codex-2`, and `C:\Users\<you>\.codex-3`.
+This widget reads the three fixed Codex profile folders for the current OS user:
+
+- `.codex`
+- `.codex-2`
+- `.codex-3`
+
+When it launches Codex CLI commands for a slot, it sets `CODEX_HOME` internally for that child process so the command uses the matching fixed folder.
 
 ## Setup Flow
 
 1. Install the Codex CLI globally.
-2. Choose one `CODEX_HOME` folder per account.
+2. Use one fixed profile folder per account slot.
 3. Use `Open Login` if that profile has not been logged in yet.
 4. Use `Check Setup` to confirm the profile folder and login state.
 5. Let the widget auto-sync on open, or use `Sync Now` / `Resync All` for immediate refresh.
 
-You can start with the common default profiles (`.codex`, `.codex-2`, `.codex-3`) or add more accounts and point them at additional profile folders as needed.
+The widget always uses these three profile folders in order:
+
+- `.codex`
+- `.codex-2`
+- `.codex-3`
+
+There is no dynamic account discovery or custom profile-path mapping anymore.
 
 ## Troubleshooting
 
 - `Codex CLI not found`: run `npm install -g @openai/codex`
-- `Needs login` or `Not logged in`: use `Open Login` for that `CODEX_HOME`
+- `Needs login` or `Not logged in`: use `Open Login` for that fixed profile folder
 - `Sync failed`: retry with `Resync All` or `Sync Now`
-- Display name changed unexpectedly: successful setup checks and live syncs currently replace the visible account label with the profile's logged-in email
+- `This Codex account is already connected`: that folder is signed into the same account as another fixed slot
+- If a slot shows a duplicate account, use `Relogin` on that exact slot and sign in with a different account
+- If one fixed profile is missing, use `Open Login` for that exact slot to create or sign into it
 
 ## Development
 
@@ -109,7 +123,7 @@ Before pushing changes, at minimum:
 - Optional `Always On Top` toggle in Settings
 - Optional `Launch On Startup` toggle in Settings for Windows sign-in
 - `Resync All` button in Settings for manual retry across all configured accounts
-- Account setup per profile using `CODEX_HOME`
+- Account setup per fixed profile folder
 - Live Codex quota sync through the Codex CLI app-server
 - Configured and ready accounts auto-sync whenever the widget opens
 - Unsynced accounts stay empty instead of showing fallback quota
@@ -119,7 +133,7 @@ Before pushing changes, at minimum:
 
 ## Notes
 
-- `Open Login` launches `codex login` for the selected `CODEX_HOME`.
+- `Open Login` launches `codex login` for the selected fixed profile folder.
 - On macOS, `Open Login` uses Terminal via AppleScript and is intended to be run from a Mac environment.
 - `Sync Now` is still available in Settings, but it is only for manual refresh or retry. Ready accounts now auto-sync on app open.
 - `Always On Top` is stored locally in the widget and restored on launch.
